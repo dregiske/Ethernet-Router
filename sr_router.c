@@ -12,6 +12,8 @@
  **********************************************************************/
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 
 
@@ -23,8 +25,8 @@
 #include "sr_utils.h"
 
 /* Declaring helpers */
-static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface);
-static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface);
+static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface);
+static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface);
 
 
 /*---------------------------------------------------------------------
@@ -90,22 +92,65 @@ void sr_handlepacket(struct sr_instance* sr,
 	sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)packet;
 	uint16_t etype = ntohs(eth->ether_type);
 	if (etype == ethertype_arp) {
-
+		handle_arp(sr, packet, len, interface);
 	} else if (etype == ethertype_ip) {
-
+		handle_ip(sr, packet, len, interface);
 	} else {
 
 	}
 
 }/* end sr_ForwardPacket */
 
+
 /* Helper Functions */
 
-static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface){
+static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface){
+	// Length sanity
+	if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t)) return;
 
+	// Locate the ARP header
+	sr_arp_hdr_t *arp = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+
+	// Look up the interface
+	struct sr_if *iface = sr_get_interface(sr, interface);
+	if (!iface) return;
+
+	// Branch on opcode
+	uint16_t op = ntohs(arp->ar_op);
+
+	if (op == arp_op_request) {
+		if (arp->ar_tip != iface->ip) return;
+
+		unsigned int reply_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
+		uint8_t *reply = (uint8_t *)malloc(reply_len);
+
+		sr_ethernet_hdr_t *reply_eth = (sr_ethernet_hdr_t *)reply;
+		sr_arp_hdr_t *reply_arp =
+			(sr_arp_hdr_t *)(reply + sizeof(sr_ethernet_hdr_t));
+
+		memcpy(reply_eth->ether_dhost, arp->ar_sha, ETHER_ADDR_LEN);
+		memcpy(reply_eth->ether_shost, iface->addr, ETHER_ADDR_LEN);
+		reply_eth->ether_type = htons(ethertype_arp);
+
+		reply_arp->ar_hrd = htons(arp_hrd_ethernet);
+		reply_arp->ar_pro = htons(ethertype_ip);
+		reply_arp->ar_hln = 6;
+		reply_arp->ar_pln = 4;
+		reply_arp->ar_op  = htons(arp_op_reply);
+		memcpy(reply_arp->ar_sha, iface->addr, ETHER_ADDR_LEN);
+		reply_arp->ar_sip = iface->ip;
+		memcpy(reply_arp->ar_tha, arp->ar_sha, ETHER_ADDR_LEN);
+		reply_arp->ar_tip = arp->ar_sip;
+
+		sr_send_packet(sr, reply, reply_len, interface);
+		free(reply);
+
+	} else if (op == arp_op_reply) {
+		
+	}
 }
 
-static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface){
+static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface){
 
 }
 
