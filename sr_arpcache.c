@@ -22,7 +22,10 @@ static void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
     if (difftime(now, req->sent) < 1.0) return;
 
     if (req->times_sent >= 5) {
-
+        struct sr_packet *p;
+        for (p = req->packets; p != NULL; p = p->next) {
+            send_icmp_error(sr, 3, 1, p->buf, p->len);
+        }
         sr_arpreq_destroy(&sr->cache, req);
         return;
     }
