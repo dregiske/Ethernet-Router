@@ -235,7 +235,11 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
         sr_send_packet(sr, packet, len, interface);
 
     } else {
-        if (ip->ip_ttl <= 1) return;
+        /* TTL would hit 0 -> send ICMP time exceeded (type 11/0), drop. */
+        if (ip->ip_ttl <= 1) {
+            send_icmp_error(sr, 11, 0, packet, len);
+            return;
+        }
         ip->ip_ttl--;
 
         ip->ip_sum = 0;
@@ -249,7 +253,11 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
             }
         }
 
-        if (route == NULL) return;
+        /* No route -> send ICMP destination net unreachable (type 3/0). */
+        if (route == NULL) {
+            send_icmp_error(sr, 3, 0, packet, len);
+            return;
+        }
 
         struct sr_if *out_if = sr_get_interface(sr, route->interface);
         if (!out_if) return;
@@ -292,3 +300,62 @@ void send_arp_request(struct sr_instance *sr, uint32_t target_ip, struct sr_if *
 	free(buf);
 }
 
+void send_icmp_error(struct sr_instance *sr, uint8_t type, uint8_t code, uint8_t *orig_packet, unsigned int orig_len) {
+	if (orig_len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) return;
+
+	sr_ethernet_hdr_t *orig_eth = (sr_ethernet_hdr_t *)orig_packet;
+	sr_ip_hdr_t *orig_ip =
+		(sr_ip_hdr_t *)(orig_packet + sizeof(sr_ethernet_hdr_t));
+
+	struct sr_rt *route = NULL;
+	for (struct sr_rt *r = sr->routing_table; r != NULL; r = r->next) {
+		if (r->dest.s_addr == orig_ip->ip_src) {
+			route = r;
+			break;
+		}
+	}
+	if (route == NULL) return;
+
+	struct sr_if *out_if = sr_get_interface(sr, route->interface);
+	if (!out_if) return;
+
+	unsigned int total_len = sizeof(sr_ethernet_hdr_t)
+	                       + sizeof(sr_ip_hdr_t)
+	                       + sizeof(sr_icmp_t11_hdr_t);
+	uint8_t *buf = (uint8_t *)malloc(total_len);
+	memset(buf, 0, total_len);
+
+	sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)buf;
+	sr_ip_hdr_t *ip = (sr_ip_hdr_t *)(buf + sizeof(sr_ethernet_hdr_t));
+	sr_icmp_t11_hdr_t *icmp = (sr_icmp_t11_hdr_t *)
+		(buf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+
+	memcpy(eth->ether_dhost, orig_eth->ether_shost, ETHER_ADDR_LEN);
+	memcpy(eth->ether_shost, out_if->addr, ETHER_ADDR_LEN);
+	eth->ether_type = htons(ethertype_ip);
+
+	ip->ip_v   = 4;
+	ip->ip_hl  = 5;
+	ip->ip_tos = 0;
+	ip->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t11_hdr_t));
+	ip->ip_id  = 0;
+	ip->ip_off = htons(IP_DF);
+	ip->ip_ttl = 64;
+	ip->ip_p   = ip_protocol_icmp;
+	ip->ip_src = out_if->ip;
+	ip->ip_dst = orig_ip->ip_src;
+	ip->ip_sum = 0;
+	ip->ip_sum = cksum(ip, sizeof(sr_ip_hdr_t));
+
+	icmp->icmp_type = type;
+	icmp->icmp_code = code;
+	icmp->unused = 0;
+	unsigned int avail = orig_len - sizeof(sr_ethernet_hdr_t);
+	unsigned int to_copy = avail < ICMP_DATA_SIZE ? avail : ICMP_DATA_SIZE;
+	memcpy(icmp->data, orig_ip, to_copy);
+	icmp->icmp_sum = 0;
+	icmp->icmp_sum = cksum(icmp, sizeof(sr_icmp_t11_hdr_t));
+
+	sr_send_packet(sr, buf, total_len, out_if->name);
+	free(buf);
+}
