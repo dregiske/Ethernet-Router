@@ -170,9 +170,16 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
 
     // Locate IP header
     sr_ip_hdr_t *ip = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+    if (ip->ip_v != 4) return;                         // IPv4 only
     unsigned int ip_hdr_len = ip->ip_hl * 4;
-    if (ip_hdr_len < 20) return;
+    if (ip_hdr_len < 20) return;                       // header too short
     if (len < sizeof(sr_ethernet_hdr_t) + ip_hdr_len) return;
+
+    // ip_len consistency: must cover at least the header AND must not
+    // claim more bytes than the actual buffer holds.
+    unsigned int total_ip_len = ntohs(ip->ip_len);
+    if (total_ip_len < ip_hdr_len) return;
+    if (sizeof(sr_ethernet_hdr_t) + total_ip_len > len) return;
 
     // Verify IP header checksum
     uint16_t orig_ip_sum = ip->ip_sum;
@@ -199,7 +206,7 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
         if (len < icmp_offset + sizeof(sr_icmp_t08_hdr_t)) return;
 
         sr_icmp_t08_hdr_t *icmp = (sr_icmp_t08_hdr_t *)(packet + icmp_offset);
-        unsigned int icmp_len = ntohs(ip->ip_len) - ip_hdr_len;
+        unsigned int icmp_len = total_ip_len - ip_hdr_len;
 
         uint16_t orig_icmp_sum = icmp->icmp_sum;
         icmp->icmp_sum = 0;
