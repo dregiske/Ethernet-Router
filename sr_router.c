@@ -170,13 +170,11 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
 
     // Locate IP header
     sr_ip_hdr_t *ip = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
-    if (ip->ip_v != 4) return;                         // IPv4 only
+    if (ip->ip_v != 4) return;
     unsigned int ip_hdr_len = ip->ip_hl * 4;
-    if (ip_hdr_len < 20) return;                       // header too short
+    if (ip_hdr_len < 20) return;
     if (len < sizeof(sr_ethernet_hdr_t) + ip_hdr_len) return;
 
-    // ip_len consistency: must cover at least the header AND must not
-    // claim more bytes than the actual buffer holds.
     unsigned int total_ip_len = ntohs(ip->ip_len);
     if (total_ip_len < ip_hdr_len) return;
     if (sizeof(sr_ethernet_hdr_t) + total_ip_len > len) return;
