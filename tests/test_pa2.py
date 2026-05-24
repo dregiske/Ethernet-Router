@@ -29,36 +29,36 @@ class TestPA2(CSE123TestBase):
     def test_ping_router_receiving_iface(self):
         """Ping the router's IP on the client's own subnet (eth3)."""
         output = self.client["m"].cmd(f"ping -c 1 -W 2 {self.client['gw']}")
-        self.assertIn("1 received", output,
+        self.assertIn("0% packet loss", output,
                       msg=f"ping to {self.client['gw']} (eth3) failed: {output}")
 
     def test_ping_router_cross_iface(self):
         """Ping a router IP that lives on a DIFFERENT iface from the source."""
         # client is on 10.0.1.0/24, eth1 is 192.168.2.1 — different subnet.
         output = self.client["m"].cmd(f"ping -c 1 -W 2 {self.server1['gw']}")
-        self.assertIn("1 received", output,
+        self.assertIn("0% packet loss", output,
                       msg=f"ping to {self.server1['gw']} (eth1) failed: {output}")
 
         output = self.client["m"].cmd(f"ping -c 1 -W 2 {self.server2['gw']}")
-        self.assertIn("1 received", output,
+        self.assertIn("0% packet loss", output,
                       msg=f"ping to {self.server2['gw']} (eth2) failed: {output}")
 
     # ── Behavior 1 + 2 + 4: route ICMP, ARP exchange, per-packet ARP ──
 
     def test_ping_server1_through_router(self):
         output = self.client["m"].cmd(f"ping -c 3 -W 2 {self.server1['ip']}")
-        self.assertIn("3 received", output,
+        self.assertIn("0% packet loss", output,
                       msg=f"ping client -> server1 failed: {output}")
 
     def test_ping_server2_through_router(self):
         output = self.client["m"].cmd(f"ping -c 3 -W 2 {self.server2['ip']}")
-        self.assertIn("3 received", output,
+        self.assertIn("0% packet loss", output,
                       msg=f"ping client -> server2 failed: {output}")
 
     def test_ping_server_to_server(self):
         """server1 -> server2 traverses the router across two different subnets."""
         output = self.server1["m"].cmd(f"ping -c 3 -W 2 {self.server2['ip']}")
-        self.assertIn("3 received", output,
+        self.assertIn("0% packet loss", output,
                       msg=f"ping server1 -> server2 failed: {output}")
 
     # ── Behavior 2: ARP request handling ───────────────────────────────
