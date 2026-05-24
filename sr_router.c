@@ -151,6 +151,77 @@ static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len
 }
 
 static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface){
+	// Length sanity
+    if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) return;
 
+    // Locate IP header
+    sr_ip_hdr_t *ip = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+    unsigned int ip_hdr_len = ip->ip_hl * 4;
+    if (ip_hdr_len < 20) return;
+    if (len < sizeof(sr_ethernet_hdr_t) + ip_hdr_len) return;
+
+    // Verify IP header checksum
+    uint16_t orig_ip_sum = ip->ip_sum;
+    ip->ip_sum = 0;
+    if (cksum(ip, ip_hdr_len) != orig_ip_sum) {
+        ip->ip_sum = orig_ip_sum;
+        return;
+    }
+    ip->ip_sum = orig_ip_sum;
+
+    struct sr_if *target = NULL;
+    for (struct sr_if *i = sr->if_list; i != NULL; i = i->next) {
+        if (i->ip == ip->ip_dst) {
+            target = i;
+            break;
+        }
+    }
+
+    if (target != NULL) {
+
+        if (ip->ip_p != ip_protocol_icmp) return;
+
+        unsigned int icmp_offset = sizeof(sr_ethernet_hdr_t) + ip_hdr_len;
+        if (len < icmp_offset + sizeof(sr_icmp_t08_hdr_t)) return;
+
+        sr_icmp_t08_hdr_t *icmp = (sr_icmp_t08_hdr_t *)(packet + icmp_offset);
+        unsigned int icmp_len = ntohs(ip->ip_len) - ip_hdr_len;
+
+        uint16_t orig_icmp_sum = icmp->icmp_sum;
+        icmp->icmp_sum = 0;
+        if (cksum(icmp, icmp_len) != orig_icmp_sum) {
+            icmp->icmp_sum = orig_icmp_sum;
+            return;
+        }
+
+        if (icmp->icmp_type != 8) {
+            icmp->icmp_sum = orig_icmp_sum;
+            return;
+        }
+
+        sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)packet;
+
+        uint8_t tmp_mac[ETHER_ADDR_LEN];
+        memcpy(tmp_mac, eth->ether_dhost, ETHER_ADDR_LEN);
+        memcpy(eth->ether_dhost, eth->ether_shost, ETHER_ADDR_LEN);
+        memcpy(eth->ether_shost, tmp_mac, ETHER_ADDR_LEN);
+
+        uint32_t tmp_ip = ip->ip_src;
+        ip->ip_src = ip->ip_dst;
+        ip->ip_dst = tmp_ip;
+
+        ip->ip_ttl = 64;
+        ip->ip_sum = 0;
+        ip->ip_sum = cksum(ip, ip_hdr_len);
+
+        icmp->icmp_type = 0;
+        icmp->icmp_sum = 0;
+        icmp->icmp_sum = cksum(icmp, icmp_len);
+
+        sr_send_packet(sr, packet, len, interface);
+
+    } else {
+        
+    }
 }
 
