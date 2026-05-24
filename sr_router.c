@@ -235,7 +235,6 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
         sr_send_packet(sr, packet, len, interface);
 
     } else {
-        /* TTL would hit 0 -> send ICMP time exceeded (type 11/0), drop. */
         if (ip->ip_ttl <= 1) {
             send_icmp_error(sr, 11, 0, packet, len);
             return;
@@ -253,7 +252,6 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
             }
         }
 
-        /* No route -> send ICMP destination net unreachable (type 3/0). */
         if (route == NULL) {
             send_icmp_error(sr, 3, 0, packet, len);
             return;
