@@ -11,13 +11,49 @@
 #include "sr_if.h"
 #include "sr_protocol.h"
 
-/* 
+/* Handle a single outstanding ARP request:
+	- if >= 1s has passed since the last send && we sent over 5 times
+    	resend the ARP request and bump the counter
+	- if we already sent 5 times
+   		give up
+*/
+static void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
+    time_t now = time(NULL);
+    if (difftime(now, req->sent) < 1.0) return;
+
+    if (req->times_sent >= 5) {
+
+        sr_arpreq_destroy(&sr->cache, req);
+        return;
+    }
+
+    if (req->packets == NULL) {
+        sr_arpreq_destroy(&sr->cache, req);
+        return;
+    }
+    struct sr_if *out_if = sr_get_interface(sr, req->packets->iface);
+    if (!out_if) {
+        sr_arpreq_destroy(&sr->cache, req);
+        return;
+    }
+
+    send_arp_request(sr, req->ip, out_if);
+    req->sent = now;
+    req->times_sent++;
+}
+
+/*
   This function gets called every second. For each request sent out, we keep
   checking whether we should resend an request or destroy the arp request.
   See the comments in the header file for an idea of what it should look like.
 */
-void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
+void sr_arpcache_sweepreqs(struct sr_instance *sr) {
+    struct sr_arpreq *req = sr->cache.requests;
+    while (req != NULL) {
+        struct sr_arpreq *next = req->next;
+        handle_arpreq(sr, req);
+        req = next;
+    }
 }
 
 /* You should not need to touch the rest of this code. */
