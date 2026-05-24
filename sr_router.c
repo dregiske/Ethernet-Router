@@ -22,6 +22,11 @@
 #include "sr_arpcache.h"
 #include "sr_utils.h"
 
+/* Declaring helpers */
+static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface);
+static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface);
+
+
 /*---------------------------------------------------------------------
  * Method: sr_init(void)
  * Scope:  Global
@@ -71,14 +76,36 @@ void sr_handlepacket(struct sr_instance* sr,
         unsigned int len,
         char* interface/* lent */)
 {
-  /* REQUIRES */
-  assert(sr);
-  assert(packet);
-  assert(interface);
+	/* REQUIRES */
+	assert(sr);
+	assert(packet);
+	assert(interface);
 
-  printf("*** -> Received packet of length %d \n",len);
+	printf("*** -> Received packet of length %d \n",len);
 
-  /* fill in code here */
+	// Check length
+	if (len < sizeof(sr_ethernet_hdr_t)) return;
+
+	// Check ether_type
+	sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)packet;
+	uint16_t etype = ntohs(eth->ether_type);
+	if (etype == ethertype_arp) {
+
+	} else if (etype == ethertype_ip) {
+
+	} else {
+
+	}
 
 }/* end sr_ForwardPacket */
+
+/* Helper Functions */
+
+static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface){
+
+}
+
+static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *iface){
+
+}
 
