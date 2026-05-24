@@ -68,6 +68,7 @@ int sr_read_from_server(struct sr_instance* );
 void sr_init(struct sr_instance* );
 void sr_handlepacket(struct sr_instance* , uint8_t * , unsigned int , char* );
 void send_arp_request(struct sr_instance *sr, uint32_t target_ip, struct sr_if *out_if);
+void send_icmp_error(struct sr_instance *sr, uint8_t type, uint8_t code, uint8_t *orig_packet, unsigned int orig_len);
 
 /* -- sr_if.c -- */
 void sr_add_interface(struct sr_instance* , const char* );
