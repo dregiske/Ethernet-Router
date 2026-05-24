@@ -27,7 +27,7 @@
 /* Declaring helpers */
 static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface);
 static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface);
-static void send_arp_request(struct sr_instance *sr, uint32_t target_ip, struct sr_if *out_if);
+void send_arp_request(struct sr_instance *sr, uint32_t target_ip, struct sr_if *out_if);
 
 
 /*---------------------------------------------------------------------
@@ -267,7 +267,7 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
     }
 }
 
-static void send_arp_request(struct sr_instance *sr, uint32_t target_ip, struct sr_if *out_if) {
+void send_arp_request(struct sr_instance *sr, uint32_t target_ip, struct sr_if *out_if) {
 	unsigned int req_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
 	uint8_t *buf = (uint8_t *)malloc(req_len);
 
