@@ -31,3 +31,14 @@ Validated inside the container by running POX, Mininet, and
 - Closed a server interface and pinging it to verifies the 5 retry ARP timeout and ICMP host unreachable
 
 An automated unittest suite at `tests/test_pa2.py` covers the same behaviors and a few extra edge cases.
+
+# pa2b-starter
+
+## Description and Overview
+
+Pretty much all changes are localized to `sr_router.c`, including: ARP caching, longest prefix match routing, and handling for non-ICMP protocols on top of IP.
+
+- `sr_router.c` - added `lpm`, new helper implementing Longest Prefix Match. This function walks the routing table and returns the entry whose masked destination matches the destination IP with the most specific (longest) mask. `handle_ip` has a couple big changes:
+
+1. TCP/UDP packets addressed to one of the router's interfaces now generate an ICMP port unreachable (type 3, code 3), which is what makes traceroute to the router work. Other non-ICMP protocols are still ignored.
+2. The next hop is resolved via `lpm`, with a fallback to the destination IP when the route's gateway is `0.0.0.0`. We ask the ARP cache first for a hit/miss. On a hit, the L2 addresses are rewritten and the frame is forwarded immediately. On a miss the packet queued and an ARP request sent.
