@@ -9,6 +9,12 @@ Comprehensive PA2a tests covering all seven required behaviors:
   7. Enforce ARP timeout even when no further packets arrive
 
 Plus edge cases (TTL exceeded, net unreachable, malformed packets).
+
+PA2b additions (TestPA2b, TestPA2bLPM):
+  - TCP/UDP to a router interface -> ICMP port unreachable (type 3, code 3)
+  - Other protocols to a router interface are ignored
+  - Forwarded packets reuse the ARP cache (no re-ARP within the cache TTL)
+  - Longest Prefix Match prefers the most specific route over the default
 """
 from base import *
 import unittest
@@ -161,6 +167,156 @@ class TestPA2(CSE123TestBase):
                      if IP in p and p[IP].id == id and p[ICMP].type == 8]
         self.assertTrue(len(delivered) > 0,
                         msg="First-time forward dropped instead of queued")
+
+
+class TestPA2b(CSE123TestBase):
+    """PA2b additions: port-unreachable for TCP/UDP to the router, ignoring
+    other protocols to the router, and ARP cache reuse on forward."""
+
+    def setUp(self):
+        self.setUpEnvironment(rtable='rtable', build=True, debug=False, manual_sr=False)
+
+    def tearDown(self):
+        self.tearDownEnvironment()
+
+    # ── Requirement 5a: TCP/UDP to a router interface → port unreachable ──
+
+    def test_udp_to_router_port_unreachable(self):
+        """A UDP datagram to a router IP (like a traceroute probe) must get
+        ICMP port unreachable (type 3, code 3)."""
+        self.clearPcapBuffers()
+        src = self.client
+        pkt = (Ether(src=src["mac"], dst=src["gwmac"])
+               / IP(src=src["ip"], dst=src["gw"], ttl=64)
+               / UDP(sport=33434, dport=33434))
+        self.sendPacket(pkt, node=src["m"].name)
+
+        icmps = self.expectPackets(src["m"].name, type='icmp', timewait_sec=0.5)
+        pu = [p for p, _ in icmps
+              if p[ICMP].type == 3 and p[ICMP].code == 3]
+        self.assertTrue(len(pu) > 0,
+                        msg="No ICMP port unreachable for UDP sent to router")
+
+    def test_tcp_to_router_port_unreachable(self):
+        """A TCP segment to a router IP must also get port unreachable."""
+        self.clearPcapBuffers()
+        src = self.client
+        pkt = (Ether(src=src["mac"], dst=src["gwmac"])
+               / IP(src=src["ip"], dst=src["gw"], ttl=64)
+               / TCP(sport=12345, dport=80, flags="S"))
+        self.sendPacket(pkt, node=src["m"].name)
+
+        icmps = self.expectPackets(src["m"].name, type='icmp', timewait_sec=0.5)
+        pu = [p for p, _ in icmps
+              if p[ICMP].type == 3 and p[ICMP].code == 3]
+        self.assertTrue(len(pu) > 0,
+                        msg="No ICMP port unreachable for TCP sent to router")
+
+    def test_unknown_proto_to_router_ignored(self):
+        """An IP packet to a router IP with a non-ICMP/TCP/UDP protocol should
+        be silently dropped — no ICMP error generated."""
+        self.clearPcapBuffers()
+        src = self.client
+        # protocol 111 is not ICMP(1)/TCP(6)/UDP(17)
+        pkt = (Ether(src=src["mac"], dst=src["gwmac"])
+               / IP(src=src["ip"], dst=src["gw"], ttl=64, proto=111)
+               / (b"\x00" * 8))
+        self.sendPacket(pkt, node=src["m"].name)
+
+        icmps = self.expectPackets(src["m"].name, type='icmp', timewait_sec=0.5)
+        errs = [p for p, _ in icmps if p[ICMP].type == 3]
+        self.assertEqual(len(errs), 0,
+                         msg="Router sent an ICMP error for an ignored protocol")
+
+    # ── Requirement 6/8: forwarded packets reuse the ARP cache ─────────────
+
+    def test_arp_cache_reused_on_second_forward(self):
+        """After the first forward resolves the next hop, a second forward to
+        the same next hop within the cache TTL must NOT emit a new ARP request."""
+        self.clearPcapBuffers()
+        src = self.client
+        dst = self.server2
+
+        # First forward: warms the cache (router ARPs, server replies, entry cached).
+        first = (Ether(src=src["mac"], dst=src["gwmac"])
+                 / IP(src=src["ip"], dst=dst["ip"], id=random.randint(1, 65535), ttl=64)
+                 / ICMP(type=8, id=0x11))
+        self.sendPacket(first, node=src["m"].name)
+        time.sleep(0.5)            # allow ARP round-trip + cache insert
+        self.clearPcapBuffers()    # forget the first round's ARP traffic
+
+        # Second forward to the same next hop: should hit the cache.
+        second = (Ether(src=src["mac"], dst=src["gwmac"])
+                  / IP(src=src["ip"], dst=dst["ip"], id=random.randint(1, 65535), ttl=64)
+                  / ICMP(type=8, id=0x22))
+        self.sendPacket(second, node=src["m"].name)
+
+        arps = self.expectPackets(dst["m"].name, type='arp', timewait_sec=0.5)
+        new_reqs = [p for p, _ in arps
+                    if p[ARP].op == 1 and p[ARP].pdst == dst["ip"]]
+        self.assertEqual(len(new_reqs), 0,
+                         msg="Router re-ARPed for a next hop already in cache")
+
+        icmps = self.expectPackets(dst["m"].name, type='icmp', timewait_sec=0.5)
+        delivered = [p for p, _ in icmps
+                     if IP in p and p[ICMP].type == 8]
+        self.assertTrue(len(delivered) > 0,
+                        msg="Cached forward was not delivered to the destination")
+
+
+class TestPA2bLPM(CSE123TestBase):
+    """Longest Prefix Match (Requirement 4), driven by a custom routing table
+    whose default route is listed first — a naive first-match lookup would pick
+    it and fail, while correct LPM picks the more specific /32."""
+
+    def setUp(self):
+        self.setUpEnvironment(rtable='rtable_lpm', build=True, debug=False, manual_sr=False)
+
+    def tearDown(self):
+        self.tearDownEnvironment()
+
+    def test_specific_prefix_preferred_over_default(self):
+        """Traffic to server2 must use the /32 route (eth2), not the default
+        route (eth1) that appears earlier in the table."""
+        self.clearPcapBuffers()
+        src = self.client
+        dst = self.server2
+        id = random.randint(1, 65535)
+        pkt = (Ether(src=src["mac"], dst=src["gwmac"])
+               / IP(src=src["ip"], dst=dst["ip"], id=id, ttl=64)
+               / ICMP(type=8, id=0x55))
+        self.sendPacket(pkt, node=src["m"].name)
+
+        # If LPM is correct the echo request reaches server2's wire.
+        icmps = self.expectPackets(dst["m"].name, type='icmp', timewait_sec=1.0)
+        delivered = [p for p, _ in icmps
+                     if IP in p and p[IP].id == id and p[ICMP].type == 8]
+        self.assertTrue(len(delivered) > 0,
+                        msg="LPM picked the default route instead of the /32")
+
+    def test_default_route_used_for_unmatched_dest(self):
+        """A destination matched only by the default route should be forwarded
+        via the default next hop (192.168.2.2 on eth1), not net-unreachable."""
+        self.clearPcapBuffers()
+        src = self.client
+        pkt = (Ether(src=src["mac"], dst=src["gwmac"])
+               / IP(src=src["ip"], dst="8.8.8.8", id=random.randint(1, 65535), ttl=64)
+               / ICMP(type=8, id=0x66))
+        self.sendPacket(pkt, node=src["m"].name)
+
+        # Router should ARP for the default gateway on server1's wire.
+        arps = self.expectPackets(self.server1["m"].name, type='arp', timewait_sec=0.5)
+        gw_arps = [p for p, _ in arps
+                   if p[ARP].op == 1 and p[ARP].pdst == "192.168.2.2"]
+        self.assertTrue(len(gw_arps) > 0,
+                        msg="Default route not used to resolve unmatched destination")
+
+        # And it must NOT have replied to the client with net-unreachable.
+        icmps = self.expectPackets(src["m"].name, type='icmp', timewait_sec=0.5)
+        unreach = [p for p, _ in icmps
+                   if p[ICMP].type == 3 and p[ICMP].code == 0]
+        self.assertEqual(len(unreach), 0,
+                         msg="Sent net-unreachable despite a matching default route")
 
 
 if __name__ == "__main__":
