@@ -27,7 +27,27 @@
 /* Declaring helpers */
 static void handle_arp(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface);
 static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len, char *interface);
+static struct sr_rt *lpm(struct sr_instance *sr, uint32_t ip_dst);
 void send_arp_request(struct sr_instance *sr, uint32_t target_ip, struct sr_if *out_if);
+
+/* IP protocol numbers we need to recognize when a packet is addressed to us. */
+#define IP_PROTO_TCP 0x0006
+#define IP_PROTO_UDP 0x0011
+
+/* Longest Prefix Match: return the routing-table entry whose masked
+   destination matches ip_dst with the most specific (longest) mask. */
+static struct sr_rt *lpm(struct sr_instance *sr, uint32_t ip_dst) {
+	struct sr_rt *best = NULL;
+	for (struct sr_rt *r = sr->routing_table; r != NULL; r = r->next) {
+		if ((ip_dst & r->mask.s_addr) == (r->dest.s_addr & r->mask.s_addr)) {
+			if (best == NULL ||
+			    ntohl(r->mask.s_addr) > ntohl(best->mask.s_addr)) {
+				best = r;
+			}
+		}
+	}
+	return best;
+}
 
 
 /*---------------------------------------------------------------------
@@ -198,7 +218,12 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
 
     if (target != NULL) {
 
-        if (ip->ip_p != ip_protocol_icmp) return;
+        if (ip->ip_p != ip_protocol_icmp) {
+            if (ip->ip_p == IP_PROTO_TCP || ip->ip_p == IP_PROTO_UDP) {
+                send_icmp_error(sr, 3, 3, packet, len);
+            }
+            return;
+        }
 
         unsigned int icmp_offset = sizeof(sr_ethernet_hdr_t) + ip_hdr_len;
         if (len < icmp_offset + sizeof(sr_icmp_t08_hdr_t)) return;
@@ -249,13 +274,7 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
         ip->ip_sum = 0;
         ip->ip_sum = cksum(ip, ip_hdr_len);
 
-        struct sr_rt *route = NULL;
-        for (struct sr_rt *r = sr->routing_table; r != NULL; r = r->next) {
-            if (r->dest.s_addr == ip->ip_dst) {
-                route = r;
-                break;
-            }
-        }
+        struct sr_rt *route = lpm(sr, ip->ip_dst);
 
         if (route == NULL) {
             send_icmp_error(sr, 3, 0, packet, len);
@@ -265,8 +284,20 @@ static void handle_ip(struct sr_instance *sr, uint8_t *packet, unsigned int len,
         struct sr_if *out_if = sr_get_interface(sr, route->interface);
         if (!out_if) return;
 
-        uint32_t next_hop = route->gw.s_addr;
+        uint32_t next_hop = route->gw.s_addr ? route->gw.s_addr : ip->ip_dst;
 
+        /* Cache hit: rewrite the L2 addresses and forward immediately. */
+        struct sr_arpentry *entry = sr_arpcache_lookup(&sr->cache, next_hop);
+        if (entry != NULL) {
+            sr_ethernet_hdr_t *eth = (sr_ethernet_hdr_t *)packet;
+            memcpy(eth->ether_dhost, entry->mac, ETHER_ADDR_LEN);
+            memcpy(eth->ether_shost, out_if->addr, ETHER_ADDR_LEN);
+            sr_send_packet(sr, packet, len, out_if->name);
+            free(entry);
+            return;
+        }
+
+        /* Cache miss: queue the packet and kick off an ARP request. */
         struct sr_arpreq *req = sr_arpcache_queuereq(
             &sr->cache, next_hop, packet, len, out_if->name);
 
@@ -310,13 +341,7 @@ void send_icmp_error(struct sr_instance *sr, uint8_t type, uint8_t code, uint8_t
 	sr_ip_hdr_t *orig_ip =
 		(sr_ip_hdr_t *)(orig_packet + sizeof(sr_ethernet_hdr_t));
 
-	struct sr_rt *route = NULL;
-	for (struct sr_rt *r = sr->routing_table; r != NULL; r = r->next) {
-		if (r->dest.s_addr == orig_ip->ip_src) {
-			route = r;
-			break;
-		}
-	}
+	struct sr_rt *route = lpm(sr, orig_ip->ip_src);
 	if (route == NULL) return;
 
 	struct sr_if *out_if = sr_get_interface(sr, route->interface);
