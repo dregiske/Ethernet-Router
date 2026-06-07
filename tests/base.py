@@ -27,10 +27,7 @@ with warnings.catch_warnings():
     from scapy.all import sendp, sniff, Ether, ARP, ICMP, IP, IPv6, TCP, UDP
 from queue import Queue, Empty
 
-try:
-    from lab import *          # PA2b container: /project-base/lab.py
-except ImportError:
-    from project_base.lab import *   # PA2a container layout
+from project_base.lab import *
 
 @contextlib.contextmanager
 def nostdout():
